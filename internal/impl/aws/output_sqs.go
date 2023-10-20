@@ -29,6 +29,7 @@ const (
 	sqsoFieldURL             = "url"
 	sqsoFieldMessageGroupID  = "message_group_id"
 	sqsoFieldMessageDedupeID = "message_deduplication_id"
+	sqsoFieldDelaySeconds    = "delay_seconds"
 	sqsoFieldMetadata        = "metadata"
 	sqsoFieldBatching        = "batching"
 
@@ -39,6 +40,7 @@ type sqsoConfig struct {
 	URL                    string
 	MessageGroupID         *service.InterpolatedString
 	MessageDeduplicationID *service.InterpolatedString
+	DelaySeconds           *service.InterpolatedString
 
 	Metadata    *service.MetadataExcludeFilter
 	session     *session.Session
@@ -56,6 +58,11 @@ func sqsoConfigFromParsed(pConf *service.ParsedConfig) (conf sqsoConfig, err err
 	}
 	if pConf.Contains(sqsoFieldMessageDedupeID) {
 		if conf.MessageDeduplicationID, err = pConf.FieldInterpolatedString(sqsoFieldMessageDedupeID); err != nil {
+			return
+		}
+	}
+	if pConf.Contains(sqsoFieldDelaySeconds) {
+		if conf.DelaySeconds, err = pConf.FieldInterpolatedString(sqsoFieldDelaySeconds); err != nil {
 			return
 		}
 	}
@@ -92,6 +99,9 @@ By default Benthos will use a shared credentials file when connecting to AWS ser
 				Optional(),
 			service.NewInterpolatedStringField(sqsoFieldMessageDedupeID).
 				Description("An optional deduplication ID to set for messages.").
+				Optional(),
+			service.NewInterpolatedStringField(sqsoFieldDelaySeconds).
+				Description("An optional delay time in seconds for message. Value between 0 and 900").
 				Optional(),
 			service.NewOutputMaxInFlightField().
 				Description("The maximum number of parallel message batches to have in flight at any given time."),
@@ -154,10 +164,11 @@ func (a *sqsWriter) Connect(ctx context.Context) error {
 }
 
 type sqsAttributes struct {
-	attrMap  map[string]*sqs.MessageAttributeValue
-	groupID  *string
-	dedupeID *string
-	content  *string
+	attrMap      map[string]*sqs.MessageAttributeValue
+	groupID      *string
+	dedupeID     *string
+	delaySeconds *int64
+	content      *string
 }
 
 var sqsAttributeKeyInvalidCharRegexp = regexp.MustCompile(`(^\.)|(\.\.)|(^aws\.)|(^amazon\.)|(\.$)|([^a-z0-9_\-.]+)`)
@@ -195,6 +206,7 @@ func (a *sqsWriter) getSQSAttributes(batch service.MessageBatch, i int) (sqsAttr
 	}
 
 	var groupID, dedupeID *string
+	var delaySeconds *int64
 	if a.conf.MessageGroupID != nil {
 		groupIDStr, err := batch.TryInterpolatedString(i, a.conf.MessageGroupID)
 		if err != nil {
@@ -209,6 +221,21 @@ func (a *sqsWriter) getSQSAttributes(batch service.MessageBatch, i int) (sqsAttr
 		}
 		dedupeID = aws.String(dedupeIDStr)
 	}
+	if a.conf.DelaySeconds != nil {
+		delaySecondsStr, err := batch.TryInterpolatedString(i, a.conf.DelaySeconds)
+		fmt.Printf("delay seconds str %s\n", delaySecondsStr)
+		if err != nil {
+			return sqsAttributes{}, fmt.Errorf("delay seconds interpolation: %w", err)
+		}
+		delaySecondsInt64, err := strconv.ParseInt(delaySecondsStr, 10, 64)
+		if err != nil {
+			return sqsAttributes{}, fmt.Errorf("delay seconds invalid input: %w", err)
+		}
+		if delaySecondsInt64 < 0 || delaySecondsInt64 > 900 {
+			return sqsAttributes{}, fmt.Errorf("delay seconds must be between 0 and 900")
+		}
+		delaySeconds = aws.Int64(delaySecondsInt64)
+	}
 
 	msgBytes, err := msg.AsBytes()
 	if err != nil {
@@ -216,10 +243,11 @@ func (a *sqsWriter) getSQSAttributes(batch service.MessageBatch, i int) (sqsAttr
 	}
 
 	return sqsAttributes{
-		attrMap:  values,
-		groupID:  groupID,
-		dedupeID: dedupeID,
-		content:  aws.String(string(msgBytes)),
+		attrMap:      values,
+		groupID:      groupID,
+		dedupeID:     dedupeID,
+		delaySeconds: delaySeconds,
+		content:      aws.String(string(msgBytes)),
 	}, nil
 }
 
@@ -248,6 +276,7 @@ func (a *sqsWriter) WriteBatch(ctx context.Context, batch service.MessageBatch) 
 			MessageAttributes:      attrs.attrMap,
 			MessageGroupId:         attrs.groupID,
 			MessageDeduplicationId: attrs.dedupeID,
+			DelaySeconds:           attrs.delaySeconds,
 		})
 	}
 
