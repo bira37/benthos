@@ -87,7 +87,7 @@ func sqsoOutputSpec() *service.ConfigSpec {
 		Description(output.Description(true, true, `
 Metadata values are sent along with the payload as attributes with the data type String. If the number of metadata values in a message exceeds the message attribute limit (10) then the top ten keys ordered alphabetically will be selected.
 
-The fields `+"`message_group_id` and `message_deduplication_id`"+` can be set dynamically using [function interpolations](/docs/configuration/interpolation#bloblang-queries), which are resolved individually for each message of a batch.
+The fields `+"`message_group_id`, `message_deduplication_id` and `delay_seconds`"+` can be set dynamically using [function interpolations](/docs/configuration/interpolation#bloblang-queries), which are resolved individually for each message of a batch.
 
 ### Credentials
 
